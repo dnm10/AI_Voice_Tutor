@@ -1,0 +1,10 @@
+# Node
+node_modules
+server/.env
+
+# React
+client/node_modules
+client/.env
+
+# System
+.DS_Store
