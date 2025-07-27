@@ -1,4 +1,3 @@
-// server/index.js
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -15,9 +14,7 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
-/**
- * 1) Speech → Text (Whisper)
- */
+
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   try {
     const audioPath = path.join(__dirname, req.file.path);
@@ -42,14 +39,12 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     console.log('🎙️ Transcribed:', text);
     res.json({ text });
   } catch (err) {
-    console.error('❌ Transcription error:', err.response?.data || err.message);
+    console.error('Transcription error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Transcription failed' });
   }
 });
 
-/**
- * 2) GPT (OpenRouter) – accepts full conversation history
- */
+
 app.post('/api/gpt', async (req, res) => {
   const { messages } = req.body;
 
@@ -61,7 +56,7 @@ app.post('/api/gpt', async (req, res) => {
     const response = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
-        model: 'mistralai/mistral-7b-instruct', // pick any valid OpenRouter model
+        model: 'mistralai/mistral-7b-instruct', 
         messages,
       },
       {
@@ -77,7 +72,7 @@ app.post('/api/gpt', async (req, res) => {
     const reply = response.data.choices[0].message.content;
     res.json({ reply });
   } catch (err) {
-    console.error('❌ GPT error:', err.response?.data || err.message);
+    console.error('GPT error:', err.response?.data || err.message);
     res.status(500).json({ error: 'GPT request failed' });
   }
 });
@@ -115,7 +110,7 @@ app.post('/api/speak', async (req, res) => {
     });
     res.send(response.data);
   } catch (err) {
-    console.error('❌ TTS error:', err.response?.data || err.message);
+    console.error('TTS error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Text-to-speech failed' });
   }
 });

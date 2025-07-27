@@ -1,195 +1,179 @@
-import React, { useState, useRef, useEffect} from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const scenarios = {
-    free: {               
-      title: 'Free Chat',
-      prompt: '',         
-    },
-    school: {
-      title: '🏫 At School',
-      prompt: `You are a friendly teacher on the first day of class.
-      AI: “Good morning! What’s your name?”`,
-    },
-    store: {
-      title: '🛒 At the Store',
-      prompt: `You are a shopkeeper in a grocery store.
-      AI: “Welcome! What do you want to buy today?”`,
-    },
-    home: {
-      title: '👨‍👩‍👧 At Home',
-      prompt: `You are a family member at home.
-      AI: “Who do you live with?”`,
-    },
-  };
+  free: { title: '🗣️ Free Chat', prompt: '' },
+  school: {
+    title: '🏫 At School',
+    prompt: 'You are a friendly teacher.\nAI: “Good morning! What’s your name?”'
+  },
+  store: {
+    title: '🛒 At the Store',
+    prompt: 'You are a shopkeeper.\nAI: “Welcome! What do you want to buy today?”'
+  },
+  home: {
+    title: '🏠 At Home',
+    prompt: 'You are a family member.\nAI: “Who do you live with?”'
+  }
+};
 
 function App() {
-  const [recording, setRecording] = useState(false);
-  const [responseAudio, setResponseAudio] = useState(null);
-  const [role, setRole] = useState('a helpful teacher');
-  const [status, setStatus] = useState('');
-  const [transcript, setTranscript] = useState('');
-  const [replyText, setReplyText] = useState('');
+  const [chatHistory, setChatHistory] = useState([]); // full conversation
   const [typedInput, setTypedInput] = useState('');
   const [mode, setMode] = useState('free');
-
-
+  const [role, setRole] = useState('a helpful teacher');
+  const [status, setStatus] = useState('');
+  const [responseAudio, setResponseAudio] = useState(null);
+  const [recording, setRecording] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
+  useEffect(() => {
+    if (mode !== 'free') {
+      const greeting = scenarios[mode].prompt.split('\n').find(line => line.startsWith('AI:'))?.replace('AI:', '').trim();
+      if (greeting) {
+        const welcomeMsg = { role: 'assistant', content: greeting };
+        setChatHistory([welcomeMsg]);
+        speakText(greeting);
+      }
+    } else {
+      setChatHistory([]);
+    }
+  }, [mode]);
+
+  const speakText = async (text) => {
+    try {
+      setStatus('🔊 Speaking...');
+      const res = await axios.post('http://localhost:5000/api/speak', { text }, { responseType: 'blob' });
+      const audioURL = URL.createObjectURL(res.data);
+      setResponseAudio(audioURL);
+      setStatus('');
+    } catch (err) {
+      console.error('TTS error:', err);
+      setStatus('Speech failed');
+    }
+  };
+
   const handleTextSubmit = async () => {
     if (!typedInput.trim()) return;
 
-    setTranscript(typedInput);
+    const updatedChat = [...chatHistory, { role: 'user', content: typedInput }];
+    setChatHistory(updatedChat);
+    setTypedInput('');
     setStatus('🤖 Thinking...');
+
     try {
       const { data: { reply } } = await axios.post('http://localhost:5000/api/gpt', {
-        message: typedInput,
-        role,
-        prompt: scenarios[mode].prompt
+        messages: [
+          ...(scenarios[mode].prompt ? [{ role: 'system', content: scenarios[mode].prompt }] : []),
+          ...updatedChat
+        ]
       });
-      setReplyText(reply);
 
-      const ttsRes = await axios.post('http://localhost:5000/api/speak', { text: reply }, { responseType: 'blob' });
-      const audioURL = URL.createObjectURL(ttsRes.data);
-      setResponseAudio(audioURL);
-      setStatus('Done!!!');
+      const newChat = [...updatedChat, { role: 'assistant', content: reply }];
+      setChatHistory(newChat);
+      speakText(reply);
     } catch (err) {
-      console.error('Error:', err);
-      setStatus('Text input failed');
+      console.error('GPT error:', err);
+      setStatus('Error getting reply');
     }
   };
 
   const startRecording = async () => {
-    setStatus('🎙️ Listening...');
-    setTranscript('');
-    setReplyText('');
-    setResponseAudio(null);
-
     try {
+      setStatus('🎙️ Listening...');
+      setRecording(true);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => {
-        audioChunksRef.current.push(e.data);
-      };
+      mediaRecorder.ondataavailable = e => audioChunksRef.current.push(e.data);
 
       mediaRecorder.onstop = async () => {
-        setStatus('Stopped Processing...');
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const formData = new FormData();
         formData.append('audio', audioBlob, 'input.webm');
 
         try {
           const { data: { text } } = await axios.post('http://localhost:5000/api/transcribe', formData);
-          setTranscript(text);
-          setStatus('Getting response...');
-
-          const { data: { reply } } = await axios.post('http://localhost:5000/api/gpt', {
-            message: text,
-            role,
-          });
-
-          setReplyText(reply);
-
-          const ttsRes = await axios.post('http://localhost:5000/api/speak', { text: reply }, { responseType: 'blob' });
-          const audioURL = URL.createObjectURL(ttsRes.data);
-          setResponseAudio(audioURL);
-          setStatus('Done!!!');
+          handleVoiceMessage(text);
         } catch (err) {
-          console.error('Error:', err);
-          setStatus('Voice input failed');
+          console.error('Transcription error:', err);
+          setStatus('Voice failed');
         }
       };
 
       mediaRecorder.start();
-      setRecording(true);
       setTimeout(() => {
         mediaRecorder.stop();
         setRecording(false);
       }, 4000);
     } catch (err) {
-      console.error('🎙️ Microphone error:', err);
-      setStatus('Microphone access error');
+      console.error('Mic error:', err);
+      setStatus('Mic access failed');
     }
   };
 
-  const currentPrompt = scenarios[mode].prompt;
-  
-  useEffect(() => {
+  const handleVoiceMessage = async (text) => {
+    const updatedChat = [...chatHistory, { role: 'user', content: text }];
+    setChatHistory(updatedChat);
+    setStatus('🤖 Thinking...');
 
-      if (mode !== 'free') {
-        
-        const lines = scenarios[mode].prompt.split('\n');
-        
-        const aiLine = lines.find(l => l.trim().startsWith('AI:'));
-        if (aiLine) {
-          
-          const greeting = aiLine.replace(/^AI:\s*/, '').trim();
-         
-          setReplyText(greeting);
-          
-          setTranscript('');
-          
-          setStatus('🔊 Speaking...');
-          
-          axios.post('http://localhost:5000/api/speak', { text: greeting }, { responseType: 'blob' })
-            .then(res => {
-              const url = URL.createObjectURL(res.data);
-              setResponseAudio(url);
-              setStatus('');  
-            })
-            .catch(err => {
-              console.error('TTS error:', err);
-              setStatus('TTS failed');
-            });
-        }
-      } else {
-        
-        setReplyText('');
-        setResponseAudio(null);
-        setStatus('');
-      }
-  }, [mode, currentPrompt]);
+    try {
+      const { data: { reply } } = await axios.post('http://localhost:5000/api/gpt', {
+        messages: [
+          ...(scenarios[mode].prompt ? [{ role: 'system', content: scenarios[mode].prompt }] : []),
+          ...updatedChat
+        ]
+      });
 
-
-
-  
-
+      const newChat = [...updatedChat, { role: 'assistant', content: reply }];
+      setChatHistory(newChat);
+      speakText(reply);
+    } catch (err) {
+      console.error('GPT error:', err);
+      setStatus('GPT failed');
+    }
+  };
 
   return (
     <div style={styles.container}>
       <h1 style={styles.heading}>🧞 SpeakGenie</h1>
-      
-      <div style={styles.modeSelector}>
-        <select
-          value={mode}
-          onChange={e => setMode(e.target.value)}
-          style={styles.select}
-        >
-          {Object.entries(scenarios).map(([key, { title }]) => (
-            <option key={key} value={key}>{title}</option>
-          ))}
-        </select>
-      </div>
 
+      <select value={mode} onChange={e => setMode(e.target.value)} style={styles.select}>
+        {Object.entries(scenarios).map(([key, { title }]) => (
+          <option key={key} value={key}>{title}</option>
+        ))}
+      </select>
 
-      <select style={styles.select} value={role} onChange={(e) => setRole(e.target.value)}>
+      <select style={styles.select} value={role} onChange={e => setRole(e.target.value)}>
         <option value="a helpful teacher">🧑‍🏫 Teacher</option>
         <option value="a friendly doctor">🩺 Doctor</option>
         <option value="a shopkeeper in a toy store">🧸 Toy Shopkeeper</option>
         <option value="a space alien learning Earth language">👽 Alien</option>
-        <option value="a travel agent helping a kid">🌍 Travel Agent</option>
       </select>
 
-      <div style={{ marginBottom: 15 }}>
+      <div style={styles.chatBox}>
+        {chatHistory.map((msg, idx) => (
+          <div
+            key={idx}
+            style={{
+              ...styles.chatBubble,
+              ...(msg.role === 'user' ? styles.userBubble : styles.genieBubble)
+            }}
+          >
+            <strong>{msg.role === 'user' ? 'You' : 'Genie'}:</strong> {msg.content}
+          </div>
+        ))}
+      </div>
+
+      <div style={styles.inputRow}>
         <input
           type="text"
           value={typedInput}
-          onChange={(e) => setTypedInput(e.target.value)}
+          onChange={e => setTypedInput(e.target.value)}
           placeholder="Type your message..."
           style={styles.input}
         />
@@ -201,37 +185,15 @@ function App() {
       </button>
 
       {status && <p style={styles.status}>{status}</p>}
-
-      <div style={styles.chatContainer}>
-        {transcript && (
-          <div style={{ ...styles.chatBubble, ...styles.userBubble }}>
-            <div><strong>You said:</strong></div>
-            <div>{transcript}</div>
-          </div>
-        )}
-
-        {replyText && (
-          <div style={{ ...styles.chatBubble, ...styles.genieBubble }}>
-            <div><strong>Genie says:</strong></div>
-            <div>{replyText}</div>
-          </div>
-        )}
-      </div>
-
-
-      {responseAudio && (
-        <div style={{ marginTop: 20 }}>
-          <audio controls autoPlay src={responseAudio}></audio>
-        </div>
-      )}
+      {responseAudio && <audio src={responseAudio} controls autoPlay />}
     </div>
-  
   );
 }
 
+
 const styles = {
 
-  container: {
+container: {
   minHeight: '100vh',
   borderRadius: 20,
   padding: '20px',
@@ -244,89 +206,72 @@ const styles = {
   overflow: 'hidden',
  },
 
-  heading: {
-    fontSize: 32,
-    marginBottom: 20,
+heading: {
+    fontSize: 28,
+    marginBottom: 10
   },
   select: {
     padding: 10,
+    margin: 10,
     fontSize: 16,
-    borderRadius: 8,
-    marginBottom: 20,
+    borderRadius: 8
   },
-
-  modeSelector: {
+  chatBox: {
+    background: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    maxHeight: 400,
+    overflowY: 'auto',
+    marginBottom: 10
+  },
+  chatBubble: {
     padding: 10,
-    fontSize: 16,
-    borderRadius: 8,
-    marginBottom: 20,
+    borderRadius: 10,
+    margin: '8px 0',
+    maxWidth: '50%',
+    boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
   },
-
-  
+  userBubble: {
+    backgroundColor: '#d1e7ff',
+    alignSelf: 'flex-end',
+    textAlign: 'left',
+    marginLeft: 'auto'
+  },
+  genieBubble: {
+    backgroundColor: '#e8f5e9',
+    alignSelf: 'flex-start',
+    textAlign: 'left',
+    marginRight: 'auto'
+  },
+  inputRow: {
+    display: 'flex',
+    gap: 10,
+    marginTop: 10
+  },
   input: {
+    flex: 1,
     padding: 10,
-    fontSize: 16,
-    width: '65%',
     borderRadius: 8,
-    marginRight: 10,
+    fontSize: 16
   },
   smallBtn: {
     padding: '10px 15px',
-    fontSize: 16,
     backgroundColor: '#28a745',
     color: 'white',
-    border: 'none',
     borderRadius: 8,
-    cursor: 'pointer',
+    cursor: 'pointer'
   },
   button: {
+    marginTop: 10,
     padding: '10px 20px',
-    fontSize: 18,
     backgroundColor: '#007bff',
     color: 'white',
-    border: 'none',
     borderRadius: 8,
-    cursor: 'pointer',
+    cursor: 'pointer'
   },
   status: {
     fontStyle: 'italic',
-    margin: '10px 0',
-  },
-  box: {
-    background: 'white',
-    padding: 15,
-    borderRadius: 10,
-    marginTop: 10,
-    textAlign: 'left',
-  },
-
-  chatContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: 10,
-    marginTop: 20,
-  },
-
-  chatBubble: {
-    maxWidth: '80%',
-    padding: 12,
-    borderRadius: 12,
-    fontSize: 16,
-    lineHeight: 1.4,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-  },
-
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#d1e7ff',
-    textAlign: 'right',
-  },
-
-  genieBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#ffffff',
-    textAlign: 'left',
+    marginTop: 10
   }
 
 };
